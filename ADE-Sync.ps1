@@ -1,21 +1,99 @@
 <#
 .SYNOPSIS
-  Triggers Apple Business Manager (ADE/DEP) sync in Intune using interactive (delegated) auth only.
+    Apple Device Enrollment (ADE/DEP) Sync Tool for Microsoft Intune
+    
+.DESCRIPTION
+    This PowerShell script automates the synchronization of Apple Business Manager 
+    (ADE/DEP) devices with Microsoft Intune. It provides an interactive interface 
+    with real-time status updates, cooldown timers, and automatic retry functionality.
+    
+    The script connects to Microsoft Graph using delegated authentication and 
+    continuously monitors and triggers ADE/DEP sync operations while respecting 
+    Microsoft's 15-minute cooldown period between sync requests.
+
+.PARAMETER None
+    This script does not accept any parameters and runs interactively.
+
+.EXAMPLE
+    .\ADE-Sync.ps1
+    Runs the ADE sync tool with interactive prompts and continuous monitoring.
+
 .NOTES
-  Requires Microsoft Graph PowerShell SDK already installed.
-  Delegated permission needed on first run: DeviceManagementServiceConfig.ReadWrite.All
+    File Name      : ADE-Sync.ps1
+    Author         : Mark Orr
+    Prerequisite   : Microsoft Graph PowerShell SDK
+    Created        : [Creation Date]
+    Last Modified  : 2025-09-25
+    Version        : 1.0
+    
+    Required Permissions:
+    - DeviceManagementServiceConfig.ReadWrite.All (Delegated)
+    
+    Dependencies:
+    - Microsoft Graph PowerShell SDK
+    - Active Apple Business Manager tokens in Intune
+    - Appropriate Azure AD permissions
+
+.LINK
+    https://docs.microsoft.com/en-us/graph/api/intune-enrollment-deponboardingsetting-sync
+    
+.COMPONENT
+    Microsoft Graph PowerShell SDK
+    Microsoft Intune
+    Apple Business Manager Integration
 #>
 
+#Requires -Modules Microsoft.Graph.Authentication, Microsoft.Graph.Beta.DeviceManagement
+
+<#
+Required Graph API Permissions:
+
+DeviceManagementConfiguration.Read.All
+DeviceManagementConfiguration.ReadWrite.All
+DeviceManagementServiceConfig.Read.All
+DeviceManagementServiceConfig.ReadWrite.All
+#>
+
+# ============================================================================
+# MICROSOFT GRAPH MODULE REQUIREMENTS
+# ============================================================================
+# Required Modules (uncomment to install if needed):
+# Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
+# Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
+# Install-Module Microsoft.Graph.Beta.DeviceManagement.Actions -Force -AllowClobber
+# Install-Module Microsoft.Graph.Beta.DeviceManagement.Enrollment -Force -AllowClobber
+# Install-Module Microsoft.Graph.Beta.Devices.CorporateManagement -Force -AllowClobber
+
+# Import necessary Microsoft Graph modules (uncomment to use):
+# "Authentication",
+# "Beta.DeviceManagement",
+# "Beta.DeviceManagement.Actions",
+# "Beta.DeviceManagement.Enrollment",
+# "Beta.Devices.CorporateManagement" | ForEach-Object {
+#     Import-Module "Microsoft.Graph.$_"
+# }
+
+# ============================================================================
+# SCRIPT PARAMETERS AND CONFIGURATION
+# ============================================================================
+# Define script parameters (none required for this script)
 [CmdletBinding()]
 param()
 
+# ============================================================================
+# HELPER FUNCTIONS SECTION
+# ============================================================================
+# Custom output functions for consistent formatting and color coding
 function Write-Info($msg)    { Write-Host $msg -ForegroundColor Cyan }
 function Write-Success($msg) { Write-Host $msg -ForegroundColor DarkGreen }
 function Write-Action($msg)  { Write-Host $msg -ForegroundColor White }
 function Write-ErrorLine($m) { Write-Host $m   -ForegroundColor DarkRed }
 function Write-Title($msg)   { Write-Host "`n$msg" -ForegroundColor Cyan }
 
-# Display header
+# ============================================================================
+# APPLICATION HEADER AND BRANDING
+# ============================================================================
+# Display ASCII art header and application title
 Write-Host @"
 
  ▄▀█ █▀▄ █▀▀   █▀ █▄█ █▄░█ █▀▀
@@ -26,63 +104,103 @@ Write-Host @"
 Write-Host "Apple Device Enrollment Sync Tool" -ForegroundColor Yellow
 Write-Host "Automated ADE/DEP synchronization with Microsoft Intune" -ForegroundColor Gray
 
-# Connect (delegated)
+# ============================================================================
+# MICROSOFT GRAPH AUTHENTICATION SECTION
+# ============================================================================
+# Connect to Microsoft Graph using delegated permissions
+# This requires interactive login and appropriate Azure AD permissions
 $scopes = @('DeviceManagementServiceConfig.ReadWrite.All')
 Write-Title "Connecting to Microsoft Graph (delegated)"
 Connect-MgGraph -Scopes $scopes -NoWelcome
 
-# ADE / DEP sync (beta cmdlets; no profile switch needed)
+# ============================================================================
+# MAIN ADE/DEP SYNC PROCESSING SECTION
+# ============================================================================
+# Initialize the ADE/DEP synchronization process using Microsoft Graph Beta cmdlets
 Write-Title "Syncing Apple Business Manager (ADE/DEP) with Intune"
 
-# Infinite sync loop
+# ============================================================================
+# CONTINUOUS MONITORING LOOP
+# ============================================================================
+# Main infinite loop that continuously monitors and processes ADE/DEP tokens
 while ($true) {
+  # Retrieve all configured ADE/DEP onboarding settings from Intune
   $depSettings = Get-MgBetaDeviceManagementDepOnboardingSetting
+  
+  # Exit if no ADE/DEP tokens are configured in Intune
   if (-not $depSettings) {
     Write-Info "No ADE/DEP tokens found."
     return
   }
 
+  # ============================================================================
+  # TOKEN PROCESSING LOOP
+  # ============================================================================
+  # Process each ADE/DEP token individually
   foreach ($dep in $depSettings) {
-  Write-Host "`n📱 " -NoNewline -ForegroundColor Blue
-  Write-Host "Token: " -NoNewline -ForegroundColor White
-  Write-Host "$($dep.TokenName)" -NoNewline -ForegroundColor Yellow
-  Write-Host " (Apple ID: " -NoNewline -ForegroundColor Gray
-  Write-Host "$($dep.AppleIdentifier)" -NoNewline -ForegroundColor Cyan
-  Write-Host ")" -ForegroundColor Gray
-  
-  try {
-    $pre = Get-MgBetaDeviceManagementDepOnboardingSetting -DepOnboardingSettingId $dep.Id |
-      Select-Object TokenName, AppleIdentifier, LastSuccessfulSyncDateTime, LastSyncTriggeredDateTime, SyncedDeviceCount
-
-    # Convert UTC times to local time for display
-    $lastSuccess = if ($pre.LastSuccessfulSyncDateTime) { 
-      [DateTime]::Parse($pre.LastSuccessfulSyncDateTime).ToLocalTime() 
-    } else { "Never" }
+    # ========================================================================
+    # TOKEN INFORMATION DISPLAY
+    # ========================================================================
+    # Display current token name and associated Apple ID
+    Write-Host "`n📱 " -NoNewline -ForegroundColor Blue
+    Write-Host "Token: " -NoNewline -ForegroundColor White
+    Write-Host "$($dep.TokenName)" -NoNewline -ForegroundColor Yellow
+    Write-Host " (Apple ID: " -NoNewline -ForegroundColor Gray
+    Write-Host "$($dep.AppleIdentifier)" -NoNewline -ForegroundColor Cyan
+    Write-Host ")" -ForegroundColor Gray
     
-    $lastTriggered = if ($pre.LastSyncTriggeredDateTime) { 
-      [DateTime]::Parse($pre.LastSyncTriggeredDateTime).ToLocalTime() 
-    } else { "Never" }
+    try {
+      # ======================================================================
+      # SYNC STATUS RETRIEVAL AND PROCESSING
+      # ======================================================================
+      # Get detailed sync information for the current token
+      $pre = Get-MgBetaDeviceManagementDepOnboardingSetting -DepOnboardingSettingId $dep.Id |
+        Select-Object TokenName, AppleIdentifier, LastSuccessfulSyncDateTime, LastSyncTriggeredDateTime, SyncedDeviceCount
 
-    Write-Host "   📊 " -NoNewline -ForegroundColor Green
-    Write-Host "Last success: " -NoNewline -ForegroundColor White
-    Write-Host "$lastSuccess" -ForegroundColor Green
-    
-    Write-Host "   🕒 " -NoNewline -ForegroundColor Blue
-    Write-Host "Last triggered: " -NoNewline -ForegroundColor White
-    Write-Host "$lastTriggered" -ForegroundColor Blue
-    
-    Write-Host "   📱 " -NoNewline -ForegroundColor Magenta
-    Write-Host "Device count: " -NoNewline -ForegroundColor White
-    Write-Host "$($pre.SyncedDeviceCount)" -ForegroundColor Magenta
-
-    # Check 15-minute cooldown
-    if ($lastTriggered -ne "Never") {
-      $timeSinceLastSync = (Get-Date) - $lastTriggered
-      $cooldownMinutes = 15
+      # Convert UTC timestamps to local time for calculations and display
+      $lastSuccessDateTime = if ($pre.LastSuccessfulSyncDateTime) { 
+        [DateTime]::Parse($pre.LastSuccessfulSyncDateTime).ToLocalTime()
+      } else { $null }
       
-      if ($timeSinceLastSync.TotalMinutes -lt $cooldownMinutes) {
-        $nextSyncTime = $lastTriggered.AddMinutes($cooldownMinutes)
-        $remainingSeconds = [math]::Ceiling(($nextSyncTime - (Get-Date)).TotalSeconds)
+      $lastTriggeredDateTime = if ($pre.LastSyncTriggeredDateTime) { 
+        [DateTime]::Parse($pre.LastSyncTriggeredDateTime).ToLocalTime()
+      } else { $null }
+      
+      # Format for display with 12-hour format
+      $lastSuccess = if ($lastSuccessDateTime) { 
+        $lastSuccessDateTime.ToString("MM/dd/yyyy h:mm:ss tt")
+      } else { "Never" }
+      
+      $lastTriggered = if ($lastTriggeredDateTime) { 
+        $lastTriggeredDateTime.ToString("MM/dd/yyyy h:mm:ss tt")
+      } else { "Never" }
+
+      # Display sync status information with icons and color coding
+      Write-Host "   📊 " -NoNewline -ForegroundColor Green
+      Write-Host "Last success: " -NoNewline -ForegroundColor White
+      Write-Host "$lastSuccess" -ForegroundColor Green
+      
+      Write-Host "   🕒 " -NoNewline -ForegroundColor Blue
+      Write-Host "Last triggered: " -NoNewline -ForegroundColor White
+      Write-Host "$lastTriggered" -ForegroundColor Blue
+      
+      Write-Host "   📱 " -NoNewline -ForegroundColor Magenta
+      Write-Host "Device count: " -NoNewline -ForegroundColor White
+      Write-Host "$($pre.SyncedDeviceCount)" -ForegroundColor Magenta
+
+      # ======================================================================
+      # COOLDOWN PERIOD VALIDATION
+      # ======================================================================
+      # Microsoft enforces a 15-minute cooldown between ADE sync requests
+      # Check if we need to wait before allowing another sync
+      if ($lastTriggeredDateTime) {
+        $timeSinceLastSync = (Get-Date) - $lastTriggeredDateTime
+        $cooldownMinutes = 15
+        
+        # If cooldown period is still active, start countdown timer
+        if ($timeSinceLastSync.TotalMinutes -lt $cooldownMinutes) {
+          $nextSyncTime = $lastTriggeredDateTime.AddMinutes($cooldownMinutes)
+          $remainingSeconds = [math]::Max(0, [math]::Floor(($nextSyncTime - (Get-Date)).TotalSeconds))
         
         Write-Host "`n   ⏱️  " -NoNewline -ForegroundColor Red
         Write-Host "Cooldown active for token: " -NoNewline -ForegroundColor White
@@ -130,7 +248,7 @@ while ($true) {
           }
           
           Start-Sleep -Seconds 1
-          $remainingSeconds = [math]::Ceiling(($nextSyncTime - (Get-Date)).TotalSeconds)
+          $remainingSeconds--
         }
         
         # Show cursor again
@@ -165,15 +283,20 @@ while ($true) {
       }
     }
 
-    Sync-MgBetaDeviceManagementDepOnboardingSettingWithAppleDeviceEnrollmentProgram `
-      -DepOnboardingSettingId $dep.Id -ErrorAction Stop
+      # ======================================================================
+      # ADE SYNC EXECUTION
+      # ======================================================================
+      # Execute the actual ADE/DEP sync operation via Microsoft Graph API
+      # This triggers Intune to sync with Apple Business Manager
+      Sync-MgBetaDeviceManagementDepOnboardingSettingWithAppleDeviceEnrollmentProgram `
+        -DepOnboardingSettingId $dep.Id -ErrorAction Stop
 
-    Write-Host "`n   ✅ " -NoNewline -ForegroundColor Green
-    Write-Host "ADE sync action submitted successfully!" -ForegroundColor White
+      Write-Host "`n   ✅ " -NoNewline -ForegroundColor Green
+      Write-Host "ADE sync action submitted successfully!" -ForegroundColor White
     
     # Always show 15-minute countdown after sync - starts immediately
     $nextSyncTime = (Get-Date).AddMinutes(15)
-    $remainingSeconds = [math]::Ceiling(($nextSyncTime - (Get-Date)).TotalSeconds)
+    $remainingSeconds = [math]::Max(0, [math]::Floor(($nextSyncTime - (Get-Date)).TotalSeconds))
     
     Write-Host "`n   ⏱️  " -NoNewline -ForegroundColor Red
     Write-Host "Starting 15-minute cooldown period..." -ForegroundColor White
@@ -220,7 +343,7 @@ while ($true) {
       }
       
       Start-Sleep -Seconds 1
-      $remainingSeconds = [math]::Ceiling(($nextSyncTime - (Get-Date)).TotalSeconds)
+      $remainingSeconds--
     }
     
     # Show cursor again
@@ -229,10 +352,10 @@ while ($true) {
     Write-Host "`n   ✅ " -NoNewline -ForegroundColor Green
     Write-Host "Cooldown period completed!" -ForegroundColor White
     
-    # Automatically continue to next cycle after 2 seconds
+    # Prompt user before continuing to next cycle
     Write-Host "`n   🔄 " -NoNewline -ForegroundColor Green
-    Write-Host "Starting next sync cycle in 3 seconds..." -ForegroundColor White
-    Start-Sleep -Seconds 3
+    Write-Host "Press Enter to start next sync cycle..." -ForegroundColor White
+    Read-Host
     
     # Clear screen and continue to next cycle
     Clear-Host
@@ -249,14 +372,23 @@ while ($true) {
     Write-Host "Automated ADE/DEP synchronization with Microsoft Intune" -ForegroundColor Gray
     
     Write-Title "Syncing Apple Business Manager (ADE/DEP) with Intune"
-  }
-  catch {
-    Write-Host "`n   ❌ " -NoNewline -ForegroundColor Red
-    Write-Host "ADE sync failed for token '" -NoNewline -ForegroundColor White
-    Write-Host "$($dep.TokenName)" -NoNewline -ForegroundColor Yellow
-    Write-Host "'" -ForegroundColor White
-    Write-Host "   💬 " -NoNewline -ForegroundColor Red
-    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Gray
-  }
-  }
-}
+    }
+    # ========================================================================
+    # ERROR HANDLING SECTION
+    # ========================================================================
+    # Catch and display any errors that occur during the sync process
+    # This includes authentication errors, API failures, or network issues
+    catch {
+      Write-Host "`n   ❌ " -NoNewline -ForegroundColor Red
+      Write-Host "ADE sync failed for token '" -NoNewline -ForegroundColor White
+      Write-Host "$($dep.TokenName)" -NoNewline -ForegroundColor Yellow
+      Write-Host "'" -ForegroundColor White
+      Write-Host "   💬 " -NoNewline -ForegroundColor Red
+      Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Gray
+    }
+  } # End of foreach token loop
+} # End of main while loop
+
+# ============================================================================
+# SCRIPT END
+# ============================================================================
