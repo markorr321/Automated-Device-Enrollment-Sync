@@ -43,8 +43,6 @@
     Apple Business Manager Integration
 #>
 
-#Requires -Modules Microsoft.Graph.Authentication, Microsoft.Graph.Beta.DeviceManagement
-
 <#
 Required Graph API Permissions:
 
@@ -55,30 +53,37 @@ DeviceManagementServiceConfig.ReadWrite.All
 #>
 
 # ============================================================================
-# MICROSOFT GRAPH MODULE REQUIREMENTS
-# ============================================================================
-# Required Modules (uncomment to install if needed):
-# Install-Module Microsoft.Graph.Authentication -Force -AllowClobber
-# Install-Module Microsoft.Graph.Beta.DeviceManagement -Force -AllowClobber
-# Install-Module Microsoft.Graph.Beta.DeviceManagement.Actions -Force -AllowClobber
-# Install-Module Microsoft.Graph.Beta.DeviceManagement.Enrollment -Force -AllowClobber
-# Install-Module Microsoft.Graph.Beta.Devices.CorporateManagement -Force -AllowClobber
-
-# Import necessary Microsoft Graph modules (uncomment to use):
-# "Authentication",
-# "Beta.DeviceManagement",
-# "Beta.DeviceManagement.Actions",
-# "Beta.DeviceManagement.Enrollment",
-# "Beta.Devices.CorporateManagement" | ForEach-Object {
-#     Import-Module "Microsoft.Graph.$_"
-# }
-
-# ============================================================================
 # SCRIPT PARAMETERS AND CONFIGURATION
 # ============================================================================
 # Define script parameters (none required for this script)
 [CmdletBinding()]
 param()
+
+# ============================================================================
+# MICROSOFT GRAPH MODULE REQUIREMENTS
+# ============================================================================
+Write-Host "`nChecking and installing required Microsoft Graph modules..." -ForegroundColor Cyan
+
+# Required Modules - Install if not present:
+$requiredModules = @(
+    'Microsoft.Graph.Authentication',
+    'Microsoft.Graph.Beta.DeviceManagement',
+    'Microsoft.Graph.Beta.DeviceManagement.Actions',
+    'Microsoft.Graph.Beta.DeviceManagement.Enrollment',
+    'Microsoft.Graph.Beta.Devices.CorporateManagement'
+)
+
+foreach ($module in $requiredModules) {
+    if (-not (Get-Module -ListAvailable -Name $module)) {
+        Write-Host "  Installing $module..." -ForegroundColor Gray
+        Install-Module $module -Force -AllowClobber -Scope CurrentUser
+    } else {
+        Write-Host "  $module already installed" -ForegroundColor DarkGray
+    }
+}
+
+Write-Host "`nAll prerequisites met! Modules will auto-load when needed." -ForegroundColor Green
+Write-Host ("=" * 60) -ForegroundColor DarkGray
 
 # ============================================================================
 # HELPER FUNCTIONS SECTION
