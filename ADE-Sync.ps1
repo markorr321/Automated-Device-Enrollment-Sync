@@ -62,9 +62,7 @@ param()
 # ============================================================================
 # MICROSOFT GRAPH MODULE REQUIREMENTS
 # ============================================================================
-Write-Host "`nChecking and installing required Microsoft Graph modules..." -ForegroundColor Cyan
-
-# Required Modules - Install if not present:
+# Check for missing modules
 $requiredModules = @(
     'Microsoft.Graph.Authentication',
     'Microsoft.Graph.Beta.DeviceManagement',
@@ -73,17 +71,36 @@ $requiredModules = @(
     'Microsoft.Graph.Beta.Devices.CorporateManagement'
 )
 
+$missingModules = @()
 foreach ($module in $requiredModules) {
     if (-not (Get-Module -ListAvailable -Name $module)) {
-        Write-Host "  Installing $module..." -ForegroundColor Gray
-        Install-Module $module -Force -AllowClobber -Scope CurrentUser
-    } else {
-        Write-Host "  $module already installed" -ForegroundColor DarkGray
+        $missingModules += $module
     }
 }
 
-Write-Host "`nAll prerequisites met! Modules will auto-load when needed." -ForegroundColor Green
-Write-Host ("=" * 60) -ForegroundColor DarkGray
+# Only prompt if there are missing modules
+if ($missingModules.Count -gt 0) {
+    Write-Host "`nThe following required modules are missing:" -ForegroundColor Yellow
+    foreach ($module in $missingModules) {
+        Write-Host "  - $module" -ForegroundColor Gray
+    }
+
+    Write-Host "`nWould you like to install these modules now? (Y/N): " -NoNewline -ForegroundColor Cyan
+    $response = Read-Host
+
+    if ($response -eq 'Y' -or $response -eq 'y') {
+        Write-Host "`nInstalling modules..." -ForegroundColor Cyan
+        foreach ($module in $missingModules) {
+            Write-Host "  Installing $module..." -ForegroundColor Gray
+            Install-Module $module -Force -AllowClobber -Scope CurrentUser
+        }
+        Write-Host "`nAll modules installed successfully!" -ForegroundColor Green
+        Write-Host ("=" * 60) -ForegroundColor DarkGray
+    } else {
+        Write-Host "`nCannot proceed without required modules. Exiting..." -ForegroundColor Red
+        exit
+    }
+}
 
 # ============================================================================
 # HELPER FUNCTIONS SECTION
