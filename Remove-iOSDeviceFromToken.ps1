@@ -2,19 +2,63 @@
 #Requires -Modules Microsoft.Graph.Authentication
 <#
 .SYNOPSIS
-    Removes an iOS device from Intune and its Apple enrollment program token.
+    iOS Device Removal Tool for Microsoft Intune and Apple DEP/ADE
 
 .DESCRIPTION
-    Uses the Microsoft Graph Beta API to locate an iOS device by serial number,
-    validates it exists in both Intune managed devices and the DEP/ADE enrollment
-    program token, then deletes from Intune first followed by the DEP token.
-    Authenticates interactively with delegated user permissions via browser sign-in.
+    This PowerShell script automates the complete removal of iOS devices from both 
+    Microsoft Intune managed devices and Apple Device Enrollment Program (DEP/ADE) 
+    tokens. It provides a streamlined workflow with validation, confirmation prompts,
+    and built-in cooldown tracking for DEP token synchronization.
+    
+    The script performs the following operations:
+    1. Validates the device exists in Intune and/or DEP token
+    2. Removes the device from Intune managed devices (with verification)
+    3. Removes the device from the Apple enrollment program token
+    4. Optionally syncs the DEP token with Apple Business Manager
+    5. Tracks 15-minute cooldown period with optional countdown timer
+    
+    Features include pagination support for large DEP token device lists,
+    cooldown status checking on startup, and the option to process multiple
+    devices in sequence.
 
 .PARAMETER SerialNumber
-    The serial number of the iOS device to remove.
+    The serial number of the iOS device to remove. If not provided, 
+    the script will prompt for input.
 
 .EXAMPLE
     .\Remove-iOSDeviceFromToken.ps1 -SerialNumber "DNQJC123ABCD"
+    Removes the specified device from Intune and DEP token.
+
+.EXAMPLE
+    .\Remove-iOSDeviceFromToken.ps1
+    Runs interactively, prompting for the device serial number.
+
+.NOTES
+    File Name      : Remove-iOSDeviceFromToken.ps1
+    Author         : Mark Orr
+    Prerequisite   : Microsoft Graph PowerShell SDK
+    Created        : 2026-02-11
+    Version        : 1.0
+    
+    RECOMMENDED: Run this script using PowerShell 7+ for best compatibility
+                 and performance. Download from https://aka.ms/powershell
+    
+    Required Permissions:
+    - DeviceManagementServiceConfig.ReadWrite.All (Delegated)
+    - DeviceManagementManagedDevices.ReadWrite.All (Delegated)
+    
+    Dependencies:
+    - Microsoft.Graph.Authentication module
+    - Active Apple Business Manager token in Intune
+    - Appropriate Azure AD permissions
+
+.LINK
+    https://docs.microsoft.com/en-us/graph/api/resources/intune-enrollment-deponboardingsetting
+
+.COMPONENT
+    Microsoft Graph PowerShell SDK
+    Microsoft Intune
+    Apple Business Manager Integration
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -59,6 +103,41 @@ function Invoke-GraphRequest {
 Write-Host "Authenticated successfully." -ForegroundColor Green
 
 # =====================
+# COOLDOWN CHECK
+# =====================
+
+# Check if any DEP tokens are in cooldown before proceeding
+Write-Host "`nChecking DEP token cooldown status..." -ForegroundColor Cyan
+$tokensForCooldown = Invoke-GraphRequest -Method GET -Uri "$GraphBaseUrl/deviceManagement/depOnboardingSettings"
+
+foreach ($tkn in $tokensForCooldown.value) {
+    $tknDetails = Invoke-GraphRequest -Method GET -Uri "$GraphBaseUrl/deviceManagement/depOnboardingSettings/$($tkn.id)"
+    $lastTriggered = $tknDetails.lastSyncTriggeredDateTime
+    
+    if ($lastTriggered) {
+        $lastTriggeredLocal = [DateTime]::Parse($lastTriggered).ToLocalTime()
+        $timeSinceSync = (Get-Date) - $lastTriggeredLocal
+        $cooldownMinutes = 15
+        
+        if ($timeSinceSync.TotalMinutes -lt $cooldownMinutes) {
+            $nextAvailable = $lastTriggeredLocal.AddMinutes($cooldownMinutes)
+            $remainingMins = [math]::Ceiling($cooldownMinutes - $timeSinceSync.TotalMinutes)
+            Write-Host "  Token '$($tkn.tokenName)': " -NoNewline -ForegroundColor Yellow
+            Write-Host "In cooldown - $remainingMins min remaining" -NoNewline -ForegroundColor Red
+            Write-Host " (available at $($nextAvailable.ToString('h:mm:ss tt')))" -ForegroundColor Gray
+        }
+        else {
+            Write-Host "  Token '$($tkn.tokenName)': " -NoNewline -ForegroundColor Yellow
+            Write-Host "Ready" -ForegroundColor Green
+        }
+    }
+    else {
+        Write-Host "  Token '$($tkn.tokenName)': " -NoNewline -ForegroundColor Yellow
+        Write-Host "Ready (never synced)" -ForegroundColor Green
+    }
+}
+
+# =====================
 # VALIDATION
 # =====================
 
@@ -97,19 +176,32 @@ else {
         $tokenName = $token.tokenName
         Write-Host "  Searching token: $tokenName..." -ForegroundColor Yellow
 
-        $devicesUri = "$GraphBaseUrl/deviceManagement/depOnboardingSettings/$tokenId/importedAppleDeviceIdentities?`$filter=serialNumber eq '$SerialNumber'"
-        try {
+        # Get all devices with pagination and filter client-side
+        $devicesUri = "$GraphBaseUrl/deviceManagement/depOnboardingSettings/$tokenId/importedAppleDeviceIdentities"
+        $allDevices = @()
+        $pageCount = 0
+        
+        while ($devicesUri) {
+            $pageCount++
             $devicesResponse = Invoke-GraphRequest -Method GET -Uri $devicesUri
+            if ($devicesResponse.value) {
+                $allDevices += $devicesResponse.value
+            }
+            # Check for next page (handle strict mode)
+            if ($devicesResponse.ContainsKey('@odata.nextLink')) {
+                $devicesUri = $devicesResponse['@odata.nextLink']
+            }
+            else {
+                $devicesUri = $null
+            }
         }
-        catch {
-            $devicesUri = "$GraphBaseUrl/deviceManagement/depOnboardingSettings/$tokenId/importedAppleDeviceIdentities"
-            $devicesResponse = Invoke-GraphRequest -Method GET -Uri $devicesUri
-            $devicesResponse.value = @($devicesResponse.value | Where-Object { $_.serialNumber -eq $SerialNumber })
-        }
+        
+        Write-Host "    Scanned $($allDevices.Count) devices across $pageCount page(s)" -ForegroundColor Gray
+        $matchingDevices = @($allDevices | Where-Object { $_.serialNumber -ieq $SerialNumber })
 
-        if ($devicesResponse.value -and $devicesResponse.value.Count -gt 0) {
+        if ($matchingDevices.Count -gt 0) {
             $foundToken = $token
-            $foundDepDevice = $devicesResponse.value[0]
+            $foundDepDevice = $matchingDevices[0]
             Write-Host "  DEP record validated in token '$tokenName'." -ForegroundColor Green
             Write-Host "    Serial Number : $($foundDepDevice.serialNumber)"
             Write-Host "    Device ID     : $($foundDepDevice.id)"
@@ -156,7 +248,9 @@ if ($intuneDevice) {
     }
 
     # Verify Intune removal
-    Write-Host "`nVerifying Intune removal..." -ForegroundColor Cyan
+    Write-Host "`nWaiting 30 seconds for deletion to propagate..." -ForegroundColor Cyan
+    Start-Sleep -Seconds 30
+    Write-Host "Verifying Intune removal..." -ForegroundColor Cyan
     $verifyResponse = Invoke-GraphRequest -Method GET -Uri $intuneUri
     $verifyDevice = $verifyResponse.value | Select-Object -First 1
     if ($verifyDevice) {
@@ -208,6 +302,71 @@ if ($foundToken) {
         try {
             Invoke-GraphRequest -Method POST -Uri "$GraphBaseUrl/deviceManagement/depOnboardingSettings/$($foundToken.id)/syncWithAppleDeviceEnrollmentProgram"
             Write-Host "  DEP token sync initiated." -ForegroundColor Green
+            
+            # Show cooldown info
+            $nextSyncTime = (Get-Date).AddMinutes(15)
+            Write-Host "`n  " -NoNewline
+            Write-Host "15-minute cooldown started" -ForegroundColor Yellow
+            Write-Host "  Next sync available at: " -NoNewline -ForegroundColor White
+            Write-Host "$($nextSyncTime.ToString('h:mm:ss tt'))" -ForegroundColor Cyan
+            
+            # Offer countdown timer
+            Write-Host ""
+            $waitChoice = Read-Host "  Wait for cooldown with countdown timer? (Y/N)"
+            if ($waitChoice -eq 'Y') {
+                $remainingSeconds = 15 * 60
+                $exitedEarly = $false
+                
+                Write-Host "`n  Press " -NoNewline -ForegroundColor Gray
+                Write-Host "Enter" -NoNewline -ForegroundColor White
+                Write-Host " to exit countdown early" -ForegroundColor Gray
+                Write-Host ""
+                
+                [Console]::CursorVisible = $false
+                
+                while ($remainingSeconds -gt 0) {
+                    $minutes = [math]::Floor($remainingSeconds / 60)
+                    $seconds = $remainingSeconds % 60
+                    
+                    $Host.UI.RawUI.CursorPosition = @{X=0; Y=$Host.UI.RawUI.CursorPosition.Y}
+                    Write-Host "  Time remaining: " -NoNewline -ForegroundColor White
+                    Write-Host "$($minutes.ToString('00')):$($seconds.ToString('00'))" -NoNewline -ForegroundColor Yellow
+                    Write-Host "   " -NoNewline
+                    
+                    if ([Console]::KeyAvailable) {
+                        $key = [Console]::ReadKey($true)
+                        if ($key.Key -eq 'Enter') {
+                            Write-Host "`n"
+                            $exitedEarly = $true
+                            break
+                        }
+                    }
+                    
+                    Start-Sleep -Seconds 1
+                    $remainingSeconds--
+                }
+                
+                [Console]::CursorVisible = $true
+                
+                if (-not $exitedEarly) {
+                    Write-Host "`n`n  Cooldown complete!" -ForegroundColor Green
+                }
+                
+                # Offer to re-run or exit
+                Write-Host ""
+                $rerunChoice = Read-Host "  [R] Remove another device  [X] Exit"
+                if ($rerunChoice -eq 'R' -or $rerunChoice -eq 'r') {
+                    Write-Host "`nRestarting tool...`n" -ForegroundColor Cyan
+                    & $PSCommandPath
+                    return
+                }
+                else {
+                    Write-Host "`nDisconnecting from Microsoft Graph..." -ForegroundColor Gray
+                    Disconnect-MgGraph | Out-Null
+                    Write-Host "Goodbye!" -ForegroundColor Green
+                    return
+                }
+            }
         }
         catch {
             Write-Warning "  Failed to sync DEP token: $($_.Exception.Message)"
